@@ -3,4 +3,4 @@ all:
 	ar -cvq ./lib/libfiledb.a filedb.o sha256.o
 
 clean:
-	rm filedb.o ./lib/libfiledb.a
+	rm *.o ./lib/libfiledb.a
