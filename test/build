@@ -1,0 +1,2 @@
+rm test
+gcc -O2 -m32 -std=c99 *.c -L../lib/ -L../../libal/lib/ -lal -lfiledb -o test -lpthread
