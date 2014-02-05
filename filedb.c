@@ -1,13 +1,15 @@
 #include <stdio.h>
-#include <pthread.h>
 #include <memory.h>
+#include <malloc.h>
+#include <pthread.h>
 
-#include "../libal/include/libal.h"
-#include "./include/filedb.h"
 #include "./include/sha256.h"
+#include "./include/filedb.h"
 
 static long lSize;
 static pthread_mutex_t filemutex = PTHREAD_MUTEX_INITIALIZER;
+
+#define FILE_USERS "./db/users"
 
 #define ERR_RET( msg )\
 	pthread_mutex_unlock( &filemutex );\
@@ -30,7 +32,7 @@ static inline char *readFile()
 	fseek( file, 0, SEEK_END );
 	lSize = ftell( file );
 	rewind( file );
-	buffer = (char*) almalloc( sizeof(char) * lSize );
+	buffer = (char*) malloc( sizeof(char) * lSize );
 	if( buffer == NULL ) {
 		ERR_RET( "malloc error" );
 	}
@@ -102,7 +104,7 @@ static inline char userExists( const char *username )
 		}
 	}
 
-	alfree( buffer );
+	free( buffer );
 	return exists;	
 }
 
@@ -119,35 +121,48 @@ static inline int getNextID()
 
 	u = (User_t *)( buffer + lSize - sizeof( User_t ) );
 	userId = u->userId + 1;
-	alfree( buffer );
+	free( buffer );
 	return userId;
 }
 
-inline char db_createUser( const char *username, const char *password )
+void db_hashPass( const char *pass, unsigned char *buffer )
 {
-	if( strlen( username ) > 32 || strlen( password ) > 32 )
+	SHA256_CTX ctx;
+
+	sha256_init( &ctx );
+   	sha256_update( &ctx, (unsigned char *)pass, strlen( (const char *)pass ) );
+   	sha256_final( &ctx, buffer );
+}
+
+char db_createUser( const char *username, const char *password )
+{
+	int userId, userLen, passLen;	
+	User_t *user;
+   	unsigned char hashpass[ SHA256_LEN ];
+		
+	userId = 0;
+	userLen = strlen( username );
+	passLen = strlen( password );
+	memset( hashpass, 0, sizeof( hashpass ) );
+
+	if( userLen < 1 || userLen > USER_MAXLEN || passLen < 1 || passLen > SHA256_LEN )
 		return DB_ERR_CREATE_LENGTH;
 	
 	if( userExists( username ) )
 		return DB_ERR_CREATE_EXISTS;
 
-   	unsigned char hashpass[ 32 ];
-	SHA256_CTX ctx;
-	int userId = 0;	
-	User_t *user;
 
-	sha256_init( &ctx );
-   	sha256_update( &ctx, (unsigned char *)password, strlen( password ) );
-   	sha256_final( &ctx, hashpass );
+	db_hashPass( password, hashpass );
+
 	userId = getNextID();
-	user = almalloc( sizeof( User_t ) );
+	user = malloc( sizeof( User_t ) );
 	memset( user, 0, sizeof( User_t ) );
 	user->userId = userId;
 	memcpy( user->username, username, strlen( username ) );
-	memcpy( user->userpass, hashpass, sizeof( hashpass ) );
-	user->flags = USER_ISACTIVE;
+	memcpy( user->userpass, hashpass, SHA256_LEN );
+	user->flags = 0;
 	addUser( user );
-	alfree( user );
+	free( user );
 		
 	return DB_CREATE;
 }
@@ -166,16 +181,7 @@ static inline int getPosByUser( const char *username, char *buffer )
 	return -1;
 }
 
-void db_hashPass( unsigned char *pass, unsigned char *buffer )
-{
-	SHA256_CTX ctx;
-
-	sha256_init( &ctx );
-   	sha256_update( &ctx, pass, strlen( (const char *)pass ) );
-   	sha256_final( &ctx, buffer );
-}
-
-inline int db_getUserFlag( const char *username, const int flag )
+int db_getUserFlag( const char *username, const int flag )
 {
 	if( strlen( username ) < 1 )
 		return 0;
@@ -194,11 +200,11 @@ inline int db_getUserFlag( const char *username, const int flag )
 	u = (User_t *)( buffer + pos );
 	rFlag = u->flags & flag;
 
-	alfree( buffer );
+	free( buffer );
 	return rFlag;
 }
 
-inline void db_setUserFlag( const char *username, const int value )
+void db_setUserFlag( const char *username, const int value )
 {
 	if( strlen( username ) < 1 )
 		return;
@@ -214,25 +220,27 @@ inline void db_setUserFlag( const char *username, const int value )
 	pos += (int )&u.flags - (int )&u;
 	updateValue( &pos, (void *)&tmp, sizeof( int ) );
 
-	alfree( buffer );
+	free( buffer );
 }
 
 static inline void print_hash( const unsigned char* c )
 {
 	int i;
 
-	for( i = 0; i < 32; i++ )
+	for( i = 0; i < USER_MAXLEN; i++ )
         	printf( "%X", *c++ );
 
 	printf( "\n" );
 }
 
-inline char db_verifyUser( const char *username, unsigned char userpass[] )
+char db_verifyUser( const char *username, unsigned char userpass[] )
 {
 	int pos;
 	User_t *u;
 	char *buffer;
 	char r;	
+
+	r = -1;
 
 	if( strlen( username ) < 1 )
 		return -1;
@@ -240,8 +248,6 @@ inline char db_verifyUser( const char *username, unsigned char userpass[] )
 	buffer = readFile();
 	if( buffer == NULL )
 		return r;
-
-	r = -1;
 	
 	pos = getPosByUser( username, buffer );	
 	u = (User_t *)( buffer + pos );
@@ -250,14 +256,18 @@ inline char db_verifyUser( const char *username, unsigned char userpass[] )
 		r = 0;
 	}	
 
-	alfree( buffer );
+	printf( "[%64s] [%64s]\n", u->userpass, userpass );
+
+	free( buffer );
 	
 	return r;
 }
 
-inline char db_verifyUserHash( const char *username, unsigned char *userpass )
+char db_verifyUserHash( const char *username, const char *userpass )
 {
-	unsigned char hash[32];
+	unsigned char hash[ SHA256_LEN ];
+
+	memset( hash, 0, sizeof( hash ) );
 
 	db_hashPass( userpass, hash );
 	return ( db_verifyUser( username, hash ) );
